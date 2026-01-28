@@ -432,8 +432,16 @@ def _timer_step():
     except Exception:
         is_playing = False
 
-    # Fill until horizon
-    while _publish_horizon_us + int(1e6 / rate_hz) <= target_horizon_us:
+    # Fill until horizon, but cap per-tick work to avoid stalling playback.
+    tick_start = time.perf_counter()
+    step_us = int(1e6 / rate_hz)
+    max_iters = max(1, int(rate_hz / 60.0 * 2.0))  # allow ~2 samples per 60fps frame
+    iters = 0
+    while _publish_horizon_us + step_us <= target_horizon_us:
+        if iters >= max_iters:
+            break
+        if (time.perf_counter() - tick_start) > 0.003:
+            break
         # Base scene time now from current frame/subframe, so playback speed affects timing
         sub_now = float(getattr(scn, 'frame_subframe', 0.0))
         t_scene_now = (scn.frame_current + sub_now) / fps
@@ -492,7 +500,11 @@ def _timer_step():
             # Update last sample cache per motor
             for it in items:
                 _last_samples[it['motor_id']] = {'t_us': int(_publish_horizon_us), 'pos': it['pos'], 'vel': it['vel']}
-        _publish_horizon_us += int(1e6 / rate_hz)
+        _publish_horizon_us += step_us
+        iters += 1
+    # If we are significantly behind, skip ahead to avoid long catch-up bursts.
+    if _publish_horizon_us + step_us * 2 < target_horizon_us:
+        _publish_horizon_us = target_horizon_us - step_us
     return 0.002
 
 
