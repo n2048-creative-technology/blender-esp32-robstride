@@ -170,3 +170,25 @@ void serial_send_telemetry(uint8_t motor_id, uint32_t rx_count, uint16_t can_rx_
   Serial.write(payload, sizeof(payload));
   Serial.write(reinterpret_cast<uint8_t*>(&crc), 2);
 }
+
+void serial_send_error(uint8_t motor_id, uint16_t error_code) {
+  uint8_t payload[1 + 1 + 4 + 4 + 1 + 1 + 2];
+  uint8_t* p = payload;
+  *p++ = 1;
+  *p++ = MSG_ERROR;
+  uint32_t seq = 0;
+  std::memcpy(p, &seq, 4);
+  p += 4;
+  uint32_t ts = 0;
+  std::memcpy(p, &ts, 4);
+  p += 4;
+  *p++ = 1;
+  *p++ = motor_id;
+  std::memcpy(p, &error_code, 2);
+  p += 2;
+  uint16_t crc = crc16_ccitt(payload, sizeof(payload));
+  uint8_t hdr[2] = {0xA5, 0x5A};
+  Serial.write(hdr, 2);
+  Serial.write(payload, sizeof(payload));
+  Serial.write(reinterpret_cast<uint8_t*>(&crc), 2);
+}

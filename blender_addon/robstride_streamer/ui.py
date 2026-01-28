@@ -5,7 +5,7 @@ from math import pi
 from .serial_link import SerialLink
 from . import fcurve_sampling
 from . import protocol
-from .telemetry_view import format_status_bar
+from .telemetry_view import format_status_bar, ERROR_CODE_MAP
 
 
 def list_serial_ports_items(self, context):
@@ -59,6 +59,43 @@ _publish_horizon_us = 0
 _traj_t0_us = None
 _scene_t0_s = 0.0
 _last_samples = {}
+_status_timer_running = False
+
+
+def _active_motor_ids(props):
+    return {int(m.motor_id) for m in props.motors} if props else set()
+
+
+def _prune_telemetry(ser, active_ids):
+    if not ser:
+        return
+    if ser.last_telem:
+        for mid in list(ser.last_telem.keys()):
+            if mid not in active_ids:
+                del ser.last_telem[mid]
+    if ser.last_error:
+        for mid in list(ser.last_error.keys()):
+            if mid not in active_ids:
+                del ser.last_error[mid]
+
+
+def _status_timer():
+    if not _status_timer_running:
+        return None
+    try:
+        scene = getattr(bpy.context, "scene", None)
+        props = getattr(scene, "robstride", None) if scene else None
+        if props:
+            ser = _get_serial(bpy.context)
+            connected_now = bool(ser and ser.is_open())
+            if props.connected != connected_now:
+                props.connected = connected_now
+                if ser and not connected_now:
+                    ser.close()
+            _prune_telemetry(ser, _active_motor_ids(props))
+    except Exception:
+        pass
+    return 0.25
 
 
 def _get_serial(context):
@@ -335,6 +372,9 @@ class ROBSTRIDE_PT_panel(bpy.types.Panel):
         status_box = layout.box()
         status_row = status_box.row()
         ser = _get_serial(context)
+        if props.connected and (ser is None or not ser.is_open()):
+            props.connected = False
+        _prune_telemetry(ser, _active_motor_ids(props))
         
         # Color coding and status text based on connection state
         if props.connected:
@@ -401,8 +441,21 @@ class ROBSTRIDE_PT_panel(bpy.types.Panel):
         if ser and ser.last_telem:
             tbox = layout.box()
             tbox.label(text="Telemetry")
+            active_ids = _active_motor_ids(props)
             for mid, it in ser.last_telem.items():
+                if active_ids and mid not in active_ids:
+                    continue
                 tbox.label(text=f"ID {mid} rx_ok {it.get('rx_count',0)} last_can 0x{it.get('last_can_id',0):X} status {it.get('status_flags',0)}")
+        if ser and ser.last_error:
+            ebox = layout.box()
+            ebox.label(text="Errors")
+            active_ids = _active_motor_ids(props)
+            for mid, it in ser.last_error.items():
+                if active_ids and mid not in active_ids:
+                    continue
+                code = int(it.get('error_code', 0))
+                msg = ERROR_CODE_MAP.get(code, f"Unknown error {code}")
+                ebox.label(text=f"ID {mid}: {msg}")
 
 
 class ROBSTRIDE_OT_add_motor(bpy.types.Operator):
@@ -426,6 +479,11 @@ class ROBSTRIDE_OT_remove_motor(bpy.types.Operator):
         props = context.scene.robstride
         if len(props.motors) > 0:
             props.motors.remove(len(props.motors) - 1)
+        try:
+            ser = _get_serial(context)
+            _prune_telemetry(ser, _active_motor_ids(props))
+        except Exception:
+            pass
         return {'FINISHED'}
 
 
@@ -483,6 +541,7 @@ classes = (
 
 
 def register_props():
+    global _status_timer_running
     bpy.types.Scene.robstride = bpy.props.PointerProperty(type=RobStrideProps)
 
     # Status bar overlay
@@ -490,15 +549,20 @@ def register_props():
         bpy.types.STATUSBAR_HT_header.append(draw_statusbar)
     except Exception:
         pass
+    if not _status_timer_running:
+        _status_timer_running = True
+        bpy.app.timers.register(_status_timer, first_interval=0.25)
 
 
 def unregister_props():
+    global _status_timer_running
     if hasattr(bpy.types.Scene, 'robstride'):
         del bpy.types.Scene.robstride
     try:
         bpy.types.STATUSBAR_HT_header.remove(draw_statusbar)
     except Exception:
         pass
+    _status_timer_running = False
 
 
 def draw_statusbar(self, context):
@@ -515,5 +579,12 @@ def draw_statusbar(self, context):
         return
     if not ser or not ser.last_telem:
         return
+    active_ids = _active_motor_ids(props)
+    if active_ids:
+        filtered = {mid: it for mid, it in ser.last_telem.items() if mid in active_ids}
+    else:
+        filtered = ser.last_telem
+    if not filtered:
+        return
     row = self.layout.row()
-    row.label(text=format_status_bar(ser.last_telem))
+    row.label(text=format_status_bar(filtered))

@@ -6,6 +6,7 @@ VERSION = 1
 MSG_SETPOINTS = 1
 MSG_COMMAND = 2
 MSG_TELEMETRY = 3
+MSG_ERROR = 4
 
 
 def crc16_ccitt(data: bytes, poly=0x1021, init=0xFFFF) -> int:
@@ -100,6 +101,8 @@ class Parser:
                         self.need = count * (1 + 6 * 4 + 2)
                     elif mtype == MSG_COMMAND:
                         self.need = 2
+                    elif mtype == MSG_ERROR:
+                        self.need = count * (1 + 2)
                     else:
                         self.state = 0
                         continue
@@ -141,6 +144,25 @@ class Parser:
                                 })
                             out.append({
                                 'type': MSG_TELEMETRY,
+                                'version': version,
+                                'seq': seq,
+                                'timestamp_us': ts,
+                                'items': items,
+                            })
+                        elif mtype == MSG_ERROR:
+                            items = []
+                            off = 0
+                            for _ in range(count):
+                                motor_id = self.payload[off]
+                                error_code = int.from_bytes(self.payload[off+1:off+3], 'little')
+                                off += 3
+                                items.append({
+                                    'motor_id': motor_id,
+                                    'error_code': error_code,
+                                    'timestamp_us': ts,
+                                })
+                            out.append({
+                                'type': MSG_ERROR,
                                 'version': version,
                                 'seq': seq,
                                 'timestamp_us': ts,

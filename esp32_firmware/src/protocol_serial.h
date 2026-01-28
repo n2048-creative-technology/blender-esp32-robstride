@@ -10,6 +10,7 @@ enum MsgType : uint8_t {
   MSG_SETPOINTS = 1,
   MSG_COMMAND = 2,
   MSG_TELEMETRY = 3,
+  MSG_ERROR = 4,
 };
 
 struct RxStats {
@@ -57,3 +58,4 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len);
 
 // TX helpers
 void serial_send_telemetry(uint8_t motor_id, uint32_t rx_count, uint16_t can_rx_flags, uint32_t last_can_id, uint16_t status_flags);
+void serial_send_error(uint8_t motor_id, uint16_t error_code);

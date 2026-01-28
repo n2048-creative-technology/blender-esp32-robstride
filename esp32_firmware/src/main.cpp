@@ -32,6 +32,12 @@ static float pos_offset[MAX_MOTORS];
 static bool calib_active[MAX_MOTORS];
 static uint32_t calib_start_us[MAX_MOTORS];
 static bool buffer_underrun[MAX_MOTORS];
+static uint16_t last_error_code[MAX_MOTORS];
+
+static const uint16_t ERR_BUFFER_UNDERRUN = 1;
+static const uint16_t ERR_WATCHDOG_TIMEOUT = 2;
+static const uint16_t ERR_CAN_TX_FAILED = 3;
+static const uint16_t ERR_INTERP_EMPTY = 4;
 static int64_t led_pulse_until_us = 0;
 static rmt_channel_handle_t led_channel = nullptr;
 static rmt_encoder_handle_t led_encoder = nullptr;
@@ -260,7 +266,13 @@ void setup() {
   proto.on_command(handle_command);
   canbus.begin();
   for (uint8_t i = 0; i < MAX_MOTORS; ++i) buffers[i].init(2048);
-  for (uint8_t i = 0; i < MAX_MOTORS; ++i) { pos_offset[i] = 0.0f; calib_active[i] = false; calib_start_us[i] = 0; buffer_underrun[i] = false; }
+  for (uint8_t i = 0; i < MAX_MOTORS; ++i) {
+    pos_offset[i] = 0.0f;
+    calib_active[i] = false;
+    calib_start_us[i] = 0;
+    buffer_underrun[i] = false;
+    last_error_code[i] = 0;
+  }
 #if LED_GPIO >= 0
   rmt_tx_channel_config_t tx_chan_config = {};
   tx_chan_config.gpio_num = (gpio_num_t)LED_GPIO;
@@ -310,11 +322,10 @@ void loop() {
           }
         }
         RefState ref{};
-        bool ok = interp.compute(buffers[idx], traj_now, &ref);
-        if (!ok) {
+        bool interp_ok = interp.compute(buffers[idx], traj_now, &ref);
+        if (!interp_ok) {
           led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
         }
-        (void)ok;
         // Calibration waveform overrides
         if (calib_active[idx]) {
           uint32_t elapsed = now - calib_start_us[idx];
@@ -336,8 +347,23 @@ void loop() {
         }
         // Apply position offset
         float pos_cmd = ref.pos - pos_offset[idx];
-        if (!canbus.send_cmd(motor_ids[idx] ? motor_ids[idx] : 1, pos_cmd, v, kp, kd, 0.0f)) {
+        bool can_ok = canbus.send_cmd(motor_ids[idx] ? motor_ids[idx] : 1, pos_cmd, v, kp, kd, 0.0f);
+        if (!can_ok) {
           led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
+        }
+        uint16_t err = 0;
+        if (!interp_ok) {
+          err = ERR_INTERP_EMPTY;
+        } else if (!can_ok) {
+          err = ERR_CAN_TX_FAILED;
+        } else if (wd) {
+          err = ERR_WATCHDOG_TIMEOUT;
+        } else if (buffer_underrun[idx]) {
+          err = ERR_BUFFER_UNDERRUN;
+        }
+        if (err != last_error_code[idx]) {
+          last_error_code[idx] = err;
+          serial_send_error(motor_ids[idx] ? motor_ids[idx] : 1, err);
         }
         // Remove past points to keep buffer fresh
         while (!buffers[idx].empty()) {

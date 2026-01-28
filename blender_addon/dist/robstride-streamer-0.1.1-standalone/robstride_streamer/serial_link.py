@@ -1,6 +1,7 @@
 import time
 import threading
 import sys
+import os
 from pathlib import Path
 
 # Try to add pyserial to path if not already imported
@@ -25,7 +26,7 @@ except Exception as e:  # pragma: no cover - Blender env may not have pyserial
     _pyserial_available = False
     _pyserial_error = str(e)
 
-from .protocol import pack_setpoints, pack_command, Parser, MSG_TELEMETRY
+from .protocol import pack_setpoints, pack_command, Parser, MSG_TELEMETRY, MSG_ERROR
 
 
 class SerialLink:
@@ -39,6 +40,7 @@ class SerialLink:
         self._parser = Parser()
         self._telem_cb = None
         self.last_telem = {}
+        self.last_error = {}
 
     @staticmethod
     def list_ports():
@@ -60,7 +62,27 @@ class SerialLink:
         return True
 
     def is_open(self) -> bool:
-        return self._ser is not None
+        if self.loopback:
+            return True
+        if self._ser is None:
+            return False
+        return self._check_port()
+
+    def _check_port(self) -> bool:
+        if self._ser is None:
+            return False
+        try:
+            if not bool(getattr(self._ser, "is_open", True)):
+                return False
+            port = getattr(self._ser, "port", None)
+            if isinstance(port, str) and port and not os.path.exists(port):
+                return False
+            # Accessing properties triggers exceptions on disconnect in pyserial
+            _ = self._ser.in_waiting
+            _ = self._ser.out_waiting
+            return True
+        except Exception:
+            return False
 
     def close(self):
         with self._lock:
@@ -144,6 +166,10 @@ class SerialLink:
                 with self._lock:
                     data = self._ser.read(512) if self._ser else b""
                 if not data:
+                    if self._ser and not self.is_open():
+                        with self._lock:
+                            self._ser = None
+                        break
                     time.sleep(0.01)
                     continue
                 frames = self._parser.feed(data)
@@ -156,5 +182,16 @@ class SerialLink:
                                     self._telem_cb(it)
                                 except Exception:
                                     pass
+                    elif fr.get('type') == MSG_ERROR:
+                        for it in fr.get('items', []):
+                            mid = it.get('motor_id')
+                            code = int(it.get('error_code', 0))
+                            if code == 0:
+                                if mid in self.last_error:
+                                    del self.last_error[mid]
+                            else:
+                                self.last_error[mid] = it
             except Exception:
+                with self._lock:
+                    self._ser = None
                 time.sleep(0.05)

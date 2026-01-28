@@ -12,6 +12,7 @@ Frame
   - 1 = SETPOINTS
   - 2 = COMMAND
   - 3 = TELEMETRY
+  - 4 = ERROR
 - Sequence: uint32 (monotonic increment per transmitter)
 - Timestamp_us: uint32 (trajectory time in microseconds)
 - Count: uint8 (number of motors in payload, currently 1)
@@ -51,6 +52,15 @@ TELEMETRY Payload (optional)
   - bit 1: calibration active
   - bit 2: watchdog tripped
   - bit 3: buffer underrun detected
+
+ERROR Payload (optional)
+- motor_id: uint8
+- error_code: uint16
+  - 0: no error (clear)
+  - 1: buffer underrun (not enough future setpoints)
+  - 2: watchdog timeout (no setpoints received)
+  - 3: CAN TX failed
+  - 4: interpolation empty (no valid setpoints)
 
 CRC
 - CRC16-CCITT (poly 0x1021, init 0xFFFF, no reflect, no xorout) over bytes from Version through end of payload, excludes header bytes.
