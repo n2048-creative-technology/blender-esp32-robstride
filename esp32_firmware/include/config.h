@@ -1,7 +1,24 @@
 #pragma once
 
+#include "serial_compat.h"
+
 // Serial
 #define SERIAL_BAUD 921600
+
+// On-board addressable RGB LED (RMT-driven). Set to -1 to disable.
+#define LED_GPIO 8
+// Pulse duration when a command is received (microseconds)
+#define LED_PULSE_US 50000
+// LED colors (0-255 per channel)
+#define LED_CMD_R 0
+#define LED_CMD_G 64
+#define LED_CMD_B 0
+#define LED_STATUS_R 32
+#define LED_STATUS_G 32
+#define LED_STATUS_B 32
+#define LED_FAIL_R 64
+#define LED_FAIL_G 0
+#define LED_FAIL_B 0
 
 // TWAI pins and bitrate for ESP32-C6, adjust to your wiring
 // These are example GPIOs, verify against your board and transceiver
@@ -47,4 +64,3 @@
 #define DBG_PRINT(x)
 #define DBG_PRINTLN(x)
 #endif
-

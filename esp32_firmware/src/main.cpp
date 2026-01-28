@@ -1,10 +1,24 @@
-#include <Arduino.h>
+#include <cmath>
+#include <cstdlib>
+
+#include "esp_attr.h"
+#include "sys/cdefs.h"
+#include "esp_err.h"
+#include "driver/rmt_encoder.h"
+#include "driver/rmt_tx.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "include/config.h"
 #include "protocol_serial.h"
 #include "ring_buffer.h"
 #include "interp.h"
 #include "robstride_can.h"
 #include "safety.h"
+
+#ifndef PI
+#define PI 3.14159265358979323846f
+#endif
 
 static SerialProtocol proto;
 static RobStrideCAN canbus;
@@ -18,6 +32,128 @@ static float pos_offset[MAX_MOTORS];
 static bool calib_active[MAX_MOTORS];
 static uint32_t calib_start_us[MAX_MOTORS];
 static bool buffer_underrun[MAX_MOTORS];
+static int64_t led_pulse_until_us = 0;
+static rmt_channel_handle_t led_channel = nullptr;
+static rmt_encoder_handle_t led_encoder = nullptr;
+
+typedef struct {
+  rmt_encoder_t base;
+  rmt_encoder_handle_t bytes_encoder;
+  rmt_encoder_handle_t copy_encoder;
+  int state;
+  rmt_symbol_word_t reset_code;
+} led_strip_encoder_t;
+
+RMT_ENCODER_FUNC_ATTR
+static size_t led_strip_encode(rmt_encoder_t* encoder,
+                               rmt_channel_handle_t channel,
+                               const void* primary_data,
+                               size_t data_size,
+                               rmt_encode_state_t* ret_state) {
+  led_strip_encoder_t* led_enc = __containerof(encoder, led_strip_encoder_t, base);
+  rmt_encode_state_t session_state = RMT_ENCODING_RESET;
+  uint32_t state = 0;
+  size_t encoded_symbols = 0;
+  switch (led_enc->state) {
+    case 0:
+      encoded_symbols += led_enc->bytes_encoder->encode(led_enc->bytes_encoder, channel, primary_data, data_size, &session_state);
+      if (session_state & RMT_ENCODING_COMPLETE) {
+        led_enc->state = 1;
+      }
+      if (session_state & RMT_ENCODING_MEM_FULL) {
+        state |= RMT_ENCODING_MEM_FULL;
+        break;
+      }
+      [[fallthrough]];
+    case 1:
+      encoded_symbols += led_enc->copy_encoder->encode(led_enc->copy_encoder, channel, &led_enc->reset_code, sizeof(led_enc->reset_code), &session_state);
+      if (session_state & RMT_ENCODING_COMPLETE) {
+        state |= RMT_ENCODING_COMPLETE;
+        led_enc->state = RMT_ENCODING_RESET;
+      }
+      if (session_state & RMT_ENCODING_MEM_FULL) {
+        state |= RMT_ENCODING_MEM_FULL;
+      }
+      break;
+  }
+  *ret_state = static_cast<rmt_encode_state_t>(state);
+  return encoded_symbols;
+}
+
+static esp_err_t led_strip_encoder_del(rmt_encoder_t* encoder) {
+  led_strip_encoder_t* led_enc = __containerof(encoder, led_strip_encoder_t, base);
+  rmt_del_encoder(led_enc->bytes_encoder);
+  rmt_del_encoder(led_enc->copy_encoder);
+  free(led_enc);
+  return ESP_OK;
+}
+
+RMT_ENCODER_FUNC_ATTR
+static esp_err_t led_strip_encoder_reset(rmt_encoder_t* encoder) {
+  led_strip_encoder_t* led_enc = __containerof(encoder, led_strip_encoder_t, base);
+  rmt_encoder_reset(led_enc->bytes_encoder);
+  rmt_encoder_reset(led_enc->copy_encoder);
+  led_enc->state = RMT_ENCODING_RESET;
+  return ESP_OK;
+}
+
+static esp_err_t led_strip_new_encoder(rmt_encoder_handle_t* ret_encoder) {
+  led_strip_encoder_t* led_enc = static_cast<led_strip_encoder_t*>(rmt_alloc_encoder_mem(sizeof(led_strip_encoder_t)));
+  if (!led_enc) return ESP_ERR_NO_MEM;
+  led_enc->base.encode = led_strip_encode;
+  led_enc->base.del = led_strip_encoder_del;
+  led_enc->base.reset = led_strip_encoder_reset;
+  led_enc->state = RMT_ENCODING_RESET;
+
+  rmt_bytes_encoder_config_t bytes_config = {};
+  bytes_config.bit0.duration0 = 3;
+  bytes_config.bit0.level0 = 1;
+  bytes_config.bit0.duration1 = 9;
+  bytes_config.bit0.level1 = 0;
+  bytes_config.bit1.duration0 = 9;
+  bytes_config.bit1.level0 = 1;
+  bytes_config.bit1.duration1 = 3;
+  bytes_config.bit1.level1 = 0;
+  bytes_config.flags.msb_first = 1;
+  if (rmt_new_bytes_encoder(&bytes_config, &led_enc->bytes_encoder) != ESP_OK) {
+    free(led_enc);
+    return ESP_FAIL;
+  }
+  rmt_copy_encoder_config_t copy_config = {};
+  if (rmt_new_copy_encoder(&copy_config, &led_enc->copy_encoder) != ESP_OK) {
+    rmt_del_encoder(led_enc->bytes_encoder);
+    free(led_enc);
+    return ESP_FAIL;
+  }
+  led_enc->reset_code = (rmt_symbol_word_t){};
+  led_enc->reset_code.duration0 = 250;
+  led_enc->reset_code.level0 = 0;
+  led_enc->reset_code.duration1 = 250;
+  led_enc->reset_code.level1 = 0;
+  *ret_encoder = &led_enc->base;
+  return ESP_OK;
+}
+
+static void led_set_rgb(uint8_t r, uint8_t g, uint8_t b) {
+#if LED_GPIO >= 0
+  if (led_channel && led_encoder) {
+    uint8_t grb[3] = {g, r, b};
+    rmt_transmit_config_t tx_config = {};
+    tx_config.loop_count = 0;
+    if (rmt_transmit(led_channel, led_encoder, grb, sizeof(grb), &tx_config) == ESP_OK) {
+      rmt_tx_wait_all_done(led_channel, pdMS_TO_TICKS(10));
+    }
+  }
+#endif
+}
+
+static void led_pulse(uint8_t r, uint8_t g, uint8_t b) {
+#if LED_GPIO >= 0
+  uint32_t now = (uint32_t)micros();
+  led_pulse_until_us = (int64_t)now + LED_PULSE_US;
+  led_set_rgb(r, g, b);
+#endif
+}
 
 // Time alignment
 static bool time_aligned = false;
@@ -59,6 +195,7 @@ static void handle_setpoints(uint32_t ts_us, const Setpoint* sps, uint8_t count)
 }
 
 static void handle_command(uint8_t cmd, uint8_t motor_id) {
+  led_pulse(LED_CMD_R, LED_CMD_G, LED_CMD_B);
   switch (cmd) {
     case 1:  // enable
       canbus.send_enable(motor_id);
@@ -124,6 +261,26 @@ void setup() {
   canbus.begin();
   for (uint8_t i = 0; i < MAX_MOTORS; ++i) buffers[i].init(2048);
   for (uint8_t i = 0; i < MAX_MOTORS; ++i) { pos_offset[i] = 0.0f; calib_active[i] = false; calib_start_us[i] = 0; buffer_underrun[i] = false; }
+#if LED_GPIO >= 0
+  rmt_tx_channel_config_t tx_chan_config = {};
+  tx_chan_config.gpio_num = (gpio_num_t)LED_GPIO;
+  tx_chan_config.clk_src = RMT_CLK_SRC_DEFAULT;
+  tx_chan_config.resolution_hz = 10 * 1000 * 1000;
+  tx_chan_config.mem_block_symbols = 64;
+  tx_chan_config.trans_queue_depth = 1;
+  tx_chan_config.flags.invert_out = 0;
+  tx_chan_config.flags.with_dma = 0;
+  if (rmt_new_tx_channel(&tx_chan_config, &led_channel) == ESP_OK) {
+    rmt_enable(led_channel);
+    if (led_strip_new_encoder(&led_encoder) == ESP_OK) {
+      led_set_rgb(0, 0, 0);
+    } else {
+      led_encoder = nullptr;
+    }
+  } else {
+    led_channel = nullptr;
+  }
+#endif
   DBG_PRINTLN("Booted");
 }
 
@@ -132,7 +289,10 @@ static uint32_t tick_period = 1000000UL / CONTROL_HZ;
 
 void loop() {
   proto.poll();
-  canbus.poll_rx();
+  bool rx_ok = canbus.poll_rx();
+  if (rx_ok) {
+    led_pulse(LED_STATUS_R, LED_STATUS_G, LED_STATUS_B);
+  }
 
   uint32_t now = micros32();
   if ((uint32_t)(now - last_tick) >= tick_period) {
@@ -151,6 +311,10 @@ void loop() {
         }
         RefState ref{};
         bool ok = interp.compute(buffers[idx], traj_now, &ref);
+        if (!ok) {
+          led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
+        }
+        (void)ok;
         // Calibration waveform overrides
         if (calib_active[idx]) {
           uint32_t elapsed = now - calib_start_us[idx];
@@ -172,7 +336,9 @@ void loop() {
         }
         // Apply position offset
         float pos_cmd = ref.pos - pos_offset[idx];
-        canbus.send_cmd(motor_ids[idx] ? motor_ids[idx] : 1, pos_cmd, v, kp, kd, 0.0f);
+        if (!canbus.send_cmd(motor_ids[idx] ? motor_ids[idx] : 1, pos_cmd, v, kp, kd, 0.0f)) {
+          led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
+        }
         // Remove past points to keep buffer fresh
         while (!buffers[idx].empty()) {
           Setpoint sp{};
@@ -186,6 +352,12 @@ void loop() {
       }
     }
   }
+#if LED_GPIO >= 0
+  if (led_pulse_until_us != 0 && (int64_t)now >= led_pulse_until_us) {
+    led_set_rgb(0, 0, 0);
+    led_pulse_until_us = 0;
+  }
+#endif
   // Telemetry at ~10 Hz
   static uint32_t last_telem = 0;
   if ((uint32_t)(now - last_telem) >= 100000) {
@@ -198,5 +370,13 @@ void loop() {
       if (buffer_underrun[i]) status |= 8;
       serial_send_telemetry(motor_ids[i] ? motor_ids[i] : 1, proto.stats.frames_ok, canbus.can_rx_flags, canbus.last_can_id, status);
     }
+  }
+}
+
+extern "C" void app_main(void) {
+  setup();
+  for (;;) {
+    loop();
+    vTaskDelay(1);
   }
 }

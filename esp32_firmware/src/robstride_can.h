@@ -1,5 +1,6 @@
 #pragma once
-#include <Arduino.h>
+
+#include <cstdint>
 #include <driver/twai.h>
 #include "include/config.h"
 

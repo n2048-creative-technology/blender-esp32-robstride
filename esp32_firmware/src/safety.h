@@ -1,5 +1,8 @@
 #pragma once
-#include <Arduino.h>
+
+#include <cstdint>
+
+#include "include/config.h"
 #include "ring_buffer.h"
 
 struct SafetyState {

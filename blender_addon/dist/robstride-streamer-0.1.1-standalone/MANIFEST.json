@@ -1,0 +1,22 @@
+{
+  "name": "RobStride Live Streamer",
+  "version": "0.1.1",
+  "type": "standalone",
+  "blender": "3.0.0",
+  "description": "Stream real-time motion setpoints from animation curves to ESP32 over Serial",
+  "author": "OpenAI Codex",
+  "build_date": "2026-01-28T12:05:11.929774",
+  "dependencies": [
+    "pyserial>=3.5"
+  ],
+  "includes_wheels": true,
+  "files": [
+    "robstride_streamer/ (addon source)",
+    "wheels/ (pre-built dependencies)",
+    "install.py (installer script)",
+    "README.md",
+    "INSTALL.md",
+    "LICENSE",
+    "MANIFEST.json"
+  ]
+}

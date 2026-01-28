@@ -1,5 +1,9 @@
 #pragma once
-#include <Arduino.h>
+
+#include <cstddef>
+#include <cstdint>
+
+#include "include/config.h"
 #include "ring_buffer.h"
 
 enum MsgType : uint8_t {
@@ -33,15 +37,17 @@ class SerialProtocol {
   uint32_t seq_ = 0;
   uint32_t ts_us_ = 0;
   uint8_t count_ = 0;
-  uint8_t item_bytes_expected_ = 0;
+  size_t item_bytes_expected_ = 0;
   uint8_t item_buf_[256];
-  uint8_t item_buf_idx_ = 0;
+  size_t item_buf_idx_ = 0;
   uint16_t crc_calc_ = 0xFFFF;
   uint16_t crc_rx_ = 0;
   Setpoint items_[MAX_MOTORS];
   uint8_t items_filled_ = 0;
   uint8_t fixed_idx_ = 0;
   uint8_t fixed_[11];
+  SetpointHandler sp_cb_ = nullptr;
+  CommandHandler cmd_cb_ = nullptr;
 
   void reset_state();
   void crc_update(uint8_t b);

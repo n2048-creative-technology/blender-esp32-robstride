@@ -1,5 +1,8 @@
 #pragma once
-#include <Arduino.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 
 struct Setpoint {
   uint32_t t_us;  // trajectory time in us
@@ -53,4 +56,3 @@ class RingBuffer {
   size_t tail_ = 0;
   size_t size_ = 0;
 };
-

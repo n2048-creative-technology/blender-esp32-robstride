@@ -1,5 +1,6 @@
 #pragma once
-#include <Arduino.h>
+
+#include <cstdint>
 #include "ring_buffer.h"
 
 struct RefState {
@@ -14,4 +15,3 @@ class Interpolator {
   // Compute reference at time t_us from a ring buffer of future setpoints
   bool compute(const RingBuffer& rb, uint32_t t_us, RefState* out);
 };
-

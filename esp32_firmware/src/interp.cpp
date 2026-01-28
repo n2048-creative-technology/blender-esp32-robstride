@@ -1,4 +1,8 @@
 #include "interp.h"
+
+#include <cstddef>
+#include <cstdint>
+
 #include "include/config.h"
 
 static inline float clampf(float x, float a, float b) { return x < a ? a : (x > b ? b : x); }
@@ -80,4 +84,3 @@ bool Interpolator::compute(const RingBuffer& rb, uint32_t t_us, RefState* out) {
   out->flags = (uint16_t)(s0.flags | s1.flags);
   return true;
 }
-
