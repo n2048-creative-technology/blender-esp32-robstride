@@ -34,10 +34,12 @@ class MotorSlot(bpy.types.PropertyGroup):
         ],
         default='ROT_Z',
     )
+    radians_for_rotation: bpy.props.BoolProperty(name="Radians", description="Interpret rotation channels as radians before scaling", default=True)
     unit_scale: bpy.props.FloatProperty(name="Scale", description="Multiply sampled values by this factor (radians for rotation when enabled below)", default=1.0)
     kp: bpy.props.FloatProperty(name="Kp", description="Position gain used in MIT command for this motor", default=30.0)
     kd: bpy.props.FloatProperty(name="Kd", description="Velocity gain used in MIT command for this motor", default=0.5)
     t_ff: bpy.props.FloatProperty(name="T_ff", description="Feedforward torque field in MIT command (units per motor firmware)", default=0.0)
+    ui_expanded: bpy.props.BoolProperty(name="Expanded", description="Show or hide motor details", default=True)
 
 
 class RobStrideProps(bpy.types.PropertyGroup):
@@ -51,6 +53,12 @@ class RobStrideProps(bpy.types.PropertyGroup):
     loopback: bpy.props.BoolProperty(name="Loopback", description="Offline mode. Print packets instead of sending", default=False)
     motors: bpy.props.CollectionProperty(type=MotorSlot)
     motors_index: bpy.props.IntProperty(name="Index", default=0)
+    show_status: bpy.props.BoolProperty(name="Show Status", default=True)
+    show_connection: bpy.props.BoolProperty(name="Show Connection", default=True)
+    show_motors: bpy.props.BoolProperty(name="Show Motors", default=True)
+    show_global_controls: bpy.props.BoolProperty(name="Show Global Controls", default=True)
+    show_telemetry: bpy.props.BoolProperty(name="Show Telemetry", default=True)
+    show_errors: bpy.props.BoolProperty(name="Show Errors", default=True)
 
 
 _serial = None
@@ -104,6 +112,14 @@ def _get_serial(context):
     if _serial is None:
         _serial = SerialLink(loopback=props.loopback)
     return _serial
+
+
+def _get_motor_by_index(props, index):
+    if props is None:
+        return None
+    if index < 0 or index >= len(props.motors):
+        return None
+    return props.motors[index]
 
 
 
@@ -202,6 +218,170 @@ class ROBSTRIDE_OT_calibrate(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class ROBSTRIDE_OT_all_enable(bpy.types.Operator):
+    bl_idname = "robstride.all_enable"
+    bl_label = "Enable All"
+    bl_description = "Send RobStride enable (8x 0xFF) to all motors in the list"
+
+    def execute(self, context):
+        props = context.scene.robstride
+        ser = _get_serial(context)
+        for m in props.motors:
+            ser.send_command(1, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_all_disable(bpy.types.Operator):
+    bl_idname = "robstride.all_disable"
+    bl_label = "Disable All"
+    bl_description = "Enter safe stop for all motors in the list"
+
+    def execute(self, context):
+        props = context.scene.robstride
+        ser = _get_serial(context)
+        for m in props.motors:
+            ser.send_command(2, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_all_zero(bpy.types.Operator):
+    bl_idname = "robstride.all_zero"
+    bl_label = "Zero All"
+    bl_description = "Software zero for all motors in the list"
+
+    def execute(self, context):
+        props = context.scene.robstride
+        ser = _get_serial(context)
+        for m in props.motors:
+            ser.send_command(4, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_all_home(bpy.types.Operator):
+    bl_idname = "robstride.all_home"
+    bl_label = "Home All"
+    bl_description = "Home at current position on firmware for all motors in the list"
+
+    def execute(self, context):
+        props = context.scene.robstride
+        ser = _get_serial(context)
+        for m in props.motors:
+            ser.send_command(6, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_all_calibrate(bpy.types.Operator):
+    bl_idname = "robstride.all_calibrate"
+    bl_label = "Calibrate All"
+    bl_description = "Run a bounded sine profile (~3 s) on firmware for all motors in the list"
+
+    def execute(self, context):
+        props = context.scene.robstride
+        ser = _get_serial(context)
+        for m in props.motors:
+            ser.send_command(7, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_motor_enable(bpy.types.Operator):
+    bl_idname = "robstride.motor_enable"
+    bl_label = "Enable Motor"
+    bl_description = "Send RobStride enable (8x 0xFF) to this motor"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        props = context.scene.robstride
+        m = _get_motor_by_index(props, self.index)
+        if m:
+            ser = _get_serial(context)
+            ser.send_command(1, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_motor_disable(bpy.types.Operator):
+    bl_idname = "robstride.motor_disable"
+    bl_label = "Disable Motor"
+    bl_description = "Enter safe stop for this motor"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        props = context.scene.robstride
+        m = _get_motor_by_index(props, self.index)
+        if m:
+            ser = _get_serial(context)
+            ser.send_command(2, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_motor_zero(bpy.types.Operator):
+    bl_idname = "robstride.motor_zero"
+    bl_label = "Zero Motor"
+    bl_description = "Software zero: set current reference position as offset for this motor"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        props = context.scene.robstride
+        m = _get_motor_by_index(props, self.index)
+        if m:
+            ser = _get_serial(context)
+            ser.send_command(4, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_motor_home(bpy.types.Operator):
+    bl_idname = "robstride.motor_home"
+    bl_label = "Home Motor"
+    bl_description = "Home at current position on firmware (software home) for this motor"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        props = context.scene.robstride
+        m = _get_motor_by_index(props, self.index)
+        if m:
+            ser = _get_serial(context)
+            ser.send_command(6, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_motor_calibrate(bpy.types.Operator):
+    bl_idname = "robstride.motor_calibrate"
+    bl_label = "Calibrate Motor"
+    bl_description = "Run a bounded sine profile (~3 s) on firmware for this motor"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        props = context.scene.robstride
+        m = _get_motor_by_index(props, self.index)
+        if m:
+            ser = _get_serial(context)
+            ser.send_command(7, m.motor_id)
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_motor_remove(bpy.types.Operator):
+    bl_idname = "robstride.motor_remove"
+    bl_label = "Remove Motor"
+    bl_description = "Remove this motor row"
+
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        props = context.scene.robstride
+        if 0 <= self.index < len(props.motors):
+            props.motors.remove(self.index)
+        try:
+            ser = _get_serial(context)
+            _prune_telemetry(ser, _active_motor_ids(props))
+        except Exception:
+            pass
+        return {'FINISHED'}
+
+
 def _timer_step():
     global _timer_running, _publish_horizon_us, _traj_t0_us
     scn = bpy.context.scene
@@ -271,7 +451,7 @@ def _timer_step():
                 t_s,
                 horizon_s=1.0 / rate_hz,
                 rate_hz=rate_hz,
-                unit_scale=(m.unit_scale if not m.channel.startswith('ROT_') else (1.0 if props.radians_for_rotation else 180.0 / pi) * m.unit_scale),
+                unit_scale=(m.unit_scale if not m.channel.startswith('ROT_') else (1.0 if m.radians_for_rotation else 180.0 / pi) * m.unit_scale),
                 rotation_in_radians=True,
                 scene=scn,
                 use_scene_eval=True,
@@ -367,95 +547,148 @@ class ROBSTRIDE_PT_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         props = context.scene.robstride
-        
-        # Connection status indicator
-        status_box = layout.box()
-        status_row = status_box.row()
+        def draw_section_header(target_layout, prop_name, label):
+            row = target_layout.row()
+            icon = 'TRIA_DOWN' if getattr(props, prop_name) else 'TRIA_RIGHT'
+            row.prop(props, prop_name, text="", icon=icon, emboss=False)
+            row.label(text=label)
+
         ser = _get_serial(context)
-        if props.connected and (ser is None or not ser.is_open()):
-            props.connected = False
+        connected_now = bool(ser and ser.is_open())
         _prune_telemetry(ser, _active_motor_ids(props))
-        
-        # Color coding and status text based on connection state
-        if props.connected:
-            if props.streaming:
-                # Streaming - green
-                status_row.label(text="● STREAMING", icon='PLAY')
+
+        connection_box = layout.box()
+        draw_section_header(connection_box, "show_connection", "Connection")
+        if props.show_connection:
+            row = connection_box.row()
+            row.prop(props, "loopback")
+            connection_box.prop(props, "serial_port", text="Port")
+            connection_box.prop(props, "baudrate")
+            connection_box.prop(props, "stream_rate")
+            connection_box.prop(props, "buffer_ahead_ms")
+            row = connection_box.row()
+            row.operator("robstride.connect", text="Connect" if not props.connected else "Reconnect")
+        status_box = layout.box()
+        draw_section_header(status_box, "show_status", "Status")
+        if props.show_status:
+            status_row = status_box.row()
+            if connected_now:
+                if props.streaming:
+                    status_row.label(text="● STREAMING", icon='PLAY')
+                else:
+                    status_row.label(text="● CONNECTED", icon='CHECKMARK')
+                info_row = status_box.row()
+                port_display = props.serial_port if props.serial_port != "loopback" else "Loopback"
+                info_row.label(text=f"Port: {port_display} @ {props.baudrate} baud", icon='PLUGIN')
+                last_tx = getattr(ser, "last_tx", None)
+                if isinstance(last_tx, dict):
+                    tx_row = status_box.row()
+                    if last_tx.get("type") == "command":
+                        cmd_names = {1: 'enable', 2: 'disable', 3: 'stop', 4: 'zero', 5: 'ping', 6: 'home', 7: 'calibrate'}
+                        cmd = int(last_tx.get("cmd", 0))
+                        cname = cmd_names.get(cmd, "unknown")
+                        mid = int(last_tx.get("motor_id", 0))
+                        tx_row.label(text=f"Last TX: {cname} (cmd {cmd}) motor {mid}")
+                    elif last_tx.get("type") == "setpoints":
+                        count = int(last_tx.get("count", 0))
+                        first = last_tx.get("first") if isinstance(last_tx.get("first"), dict) else None
+                        if first:
+                            mid = int(first.get("motor_id", 0))
+                            pos = float(first.get("pos", 0.0))
+                            vel = float(first.get("vel", 0.0))
+                            kp = float(first.get("kp", 0.0))
+                            kd = float(first.get("kd", 0.0))
+                            tff = float(first.get("t_ff", 0.0))
+                            tx_row.label(text=f"Last TX: setpoints n={count} id={mid} pos={pos:.4f} vel={vel:.4f} kp={kp:.1f} kd={kd:.2f} tff={tff:.2f}")
+                        else:
+                            tx_row.label(text=f"Last TX: setpoints n={count}")
+            elif props.loopback:
+                status_row.label(text="● LOOPBACK MODE", icon='INFO')
             else:
-                # Connected but not streaming - blue
-                status_row.label(text="● CONNECTED", icon='CHECKMARK')
-            # Show port and baud info
-            info_row = status_box.row()
-            port_display = props.serial_port if props.serial_port != "loopback" else "Loopback"
-            info_row.label(text=f"Port: {port_display} @ {props.baudrate} baud", icon='FILE_SOUND')
-        elif props.loopback:
-            # Loopback mode - yellow
-            status_row.label(text="● LOOPBACK MODE", icon='INFO')
-        else:
-            # Not connected - red
-            status_row.label(text="● DISCONNECTED", icon='X')
-        
-        row = layout.row()
-        row.prop(props, "loopback")
-        layout.prop(props, "serial_port", text="Port")
-        layout.prop(props, "baudrate")
-        layout.prop(props, "stream_rate")
-        layout.prop(props, "buffer_ahead_ms")
-        layout.prop(props, "radians_for_rotation")
-        box = layout.box()
-        box.label(text="Motors")
-        col = box.column()
-        if len(props.motors) == 0:
-            col.label(text="No motor slots configured")
-            col.operator("robstride.seed_motors", text="Seed Defaults")
-        else:
-            pass
-        for i, m in enumerate(props.motors):
-            row = col.row(align=True)
-            row.prop(m, "enabled", text="")
-            row.prop(m, "motor_id")
-            row.prop(m, "object_ref", text="Obj")
-            row.prop(m, "channel")
-            row.prop(m, "unit_scale")
-            row.prop(m, "kp")
-            row.prop(m, "kd")
-            row.prop(m, "t_ff")
-        row = box.row()
-        row.operator("robstride.add_motor")
-        row.operator("robstride.remove_motor")
-        row.operator("robstride.seed_motors", text="Seed Defaults")
-        row = layout.row()
-        row.operator("robstride.connect", text="Connect" if not props.connected else "Reconnect")
-        row = layout.row()
-        row.operator("robstride.send_enable")
-        row.operator("robstride.send_disable")
-        row.operator("robstride.zero_offset")
-        row = layout.row()
-        row.operator("robstride.home")
-        row.operator("robstride.calibrate")
-        row = layout.row()
+                status_row.label(text="● DISCONNECTED", icon='X')
+
+        stream_box = layout.box()
+        stream_box.label(text="Streaming")
+        row = stream_box.row()
         row.operator("robstride.start_stream")
         row.operator("robstride.stop_stream")
-        # Telemetry summary
+
+        controls_box = layout.box()
+        draw_section_header(controls_box, "show_global_controls", "Global Controls")
+        if props.show_global_controls:
+            controls_box.label(text="Enabled motors")
+            row = controls_box.row(align=True)
+            row.operator("robstride.send_enable", text="Enable")
+            row.operator("robstride.send_disable", text="Disable")
+            row.operator("robstride.zero_offset", text="Zero")
+            row = controls_box.row(align=True)
+            row.operator("robstride.home")
+            row.operator("robstride.calibrate", text="Calibrate")
+
+        motors_box = layout.box()
+        draw_section_header(motors_box, "show_motors", "Motors")
+        if props.show_motors:
+            row = motors_box.row()
+            row.operator("robstride.add_motor")
+            col = motors_box.column()
+            if len(props.motors) == 0:
+                col.label(text="No motor slots configured")
+            for i, m in enumerate(props.motors):
+                mbox = col.box()
+                header = mbox.row()
+                icon = 'TRIA_DOWN' if m.ui_expanded else 'TRIA_RIGHT'
+                header.prop(m, "ui_expanded", text="", icon=icon, emboss=False)
+                header.prop(m, "enabled", text="Active")
+                header.label(text=f"Motor {i + 1}")
+                remove_op = header.operator("robstride.motor_remove", text="", icon='X')
+                remove_op.index = i
+                if not m.ui_expanded:
+                    continue
+                row = mbox.row(align=True)
+                row.prop(m, "motor_id", text="CAN ID")
+                row.prop(m, "object_ref", text="Object")
+                row = mbox.row(align=True)
+                row.prop(m, "channel", text="Channel")
+                row.prop(m, "radians_for_rotation", text="Radians")
+                row.prop(m, "unit_scale", text="Scale")
+                row = mbox.row(align=True)
+                row.prop(m, "kp")
+                row.prop(m, "kd")
+                row.prop(m, "t_ff")
+                action_row = mbox.row(align=True)
+                op = action_row.operator("robstride.motor_enable", text="Enable")
+                op.index = i
+                op = action_row.operator("robstride.motor_disable", text="Disable")
+                op.index = i
+                op = action_row.operator("robstride.motor_zero", text="Zero")
+                op.index = i
+                action_row = mbox.row(align=True)
+                op = action_row.operator("robstride.motor_home", text="Home")
+                op.index = i
+                op = action_row.operator("robstride.motor_calibrate", text="Calibrate")
+                op.index = i
+
         ser = _get_serial(context)
         if ser and ser.last_telem:
             tbox = layout.box()
-            tbox.label(text="Telemetry")
-            active_ids = _active_motor_ids(props)
-            for mid, it in ser.last_telem.items():
-                if active_ids and mid not in active_ids:
-                    continue
-                tbox.label(text=f"ID {mid} rx_ok {it.get('rx_count',0)} last_can 0x{it.get('last_can_id',0):X} status {it.get('status_flags',0)}")
+            draw_section_header(tbox, "show_telemetry", "Telemetry")
+            if props.show_telemetry:
+                active_ids = _active_motor_ids(props)
+                for mid, it in ser.last_telem.items():
+                    if active_ids and mid not in active_ids:
+                        continue
+                    tbox.label(text=f"ID {mid} rx_ok {it.get('rx_count',0)} last_can 0x{it.get('last_can_id',0):X} status {it.get('status_flags',0)}")
         if ser and ser.last_error:
             ebox = layout.box()
-            ebox.label(text="Errors")
-            active_ids = _active_motor_ids(props)
-            for mid, it in ser.last_error.items():
-                if active_ids and mid not in active_ids:
-                    continue
-                code = int(it.get('error_code', 0))
-                msg = ERROR_CODE_MAP.get(code, f"Unknown error {code}")
-                ebox.label(text=f"ID {mid}: {msg}")
+            draw_section_header(ebox, "show_errors", "Errors")
+            if props.show_errors:
+                active_ids = _active_motor_ids(props)
+                for mid, it in ser.last_error.items():
+                    if active_ids and mid not in active_ids:
+                        continue
+                    code = int(it.get('error_code', 0))
+                    msg = ERROR_CODE_MAP.get(code, f"Unknown error {code}")
+                    ebox.label(text=f"ID {mid}: {msg}")
 
 
 class ROBSTRIDE_OT_add_motor(bpy.types.Operator):
@@ -487,41 +720,6 @@ class ROBSTRIDE_OT_remove_motor(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def _seed_default_motors(props):
-    # Seed 3 rotational axes with IDs 1..3, enable the first only
-    if len(props.motors) > 0:
-        return
-    defaults = [
-        {"id": 1, "channel": 'ROT_Z', "enabled": True},
-        {"id": 2, "channel": 'ROT_Y', "enabled": False},
-        {"id": 3, "channel": 'ROT_X', "enabled": False},
-    ]
-    for d in defaults:
-        m = props.motors.add()
-        m.enabled = d["enabled"]
-        m.motor_id = d["id"]
-        m.channel = d["channel"]
-        m.object_ref = bpy.context.active_object
-        m.unit_scale = 1.0
-        m.kp = 30.0
-        m.kd = 0.5
-        m.t_ff = 0.0
-
-
-class ROBSTRIDE_OT_seed_motors(bpy.types.Operator):
-    bl_idname = "robstride.seed_motors"
-    bl_label = "Seed Motors"
-    bl_description = "Overwrite current list with default motor slots (IDs 1..3 on Rot Z/Y/X)"
-
-    def execute(self, context):
-        props = context.scene.robstride
-        # Clear existing
-        while len(props.motors) > 0:
-            props.motors.remove(len(props.motors) - 1)
-        _seed_default_motors(props)
-        return {'FINISHED'}
-
-
 classes = (
     MotorSlot,
     RobStrideProps,
@@ -531,9 +729,19 @@ classes = (
     ROBSTRIDE_OT_zero_offset,
     ROBSTRIDE_OT_home,
     ROBSTRIDE_OT_calibrate,
+    ROBSTRIDE_OT_all_enable,
+    ROBSTRIDE_OT_all_disable,
+    ROBSTRIDE_OT_all_zero,
+    ROBSTRIDE_OT_all_home,
+    ROBSTRIDE_OT_all_calibrate,
+    ROBSTRIDE_OT_motor_enable,
+    ROBSTRIDE_OT_motor_disable,
+    ROBSTRIDE_OT_motor_zero,
+    ROBSTRIDE_OT_motor_home,
+    ROBSTRIDE_OT_motor_calibrate,
+    ROBSTRIDE_OT_motor_remove,
     ROBSTRIDE_OT_add_motor,
     ROBSTRIDE_OT_remove_motor,
-    ROBSTRIDE_OT_seed_motors,
     ROBSTRIDE_OT_start_stream,
     ROBSTRIDE_OT_stop_stream,
     ROBSTRIDE_PT_panel,

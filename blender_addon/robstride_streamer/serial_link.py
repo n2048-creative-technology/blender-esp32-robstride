@@ -41,6 +41,7 @@ class SerialLink:
         self._telem_cb = None
         self.last_telem = {}
         self.last_error = {}
+        self.last_tx = None
 
     @staticmethod
     def list_ports():
@@ -97,6 +98,25 @@ class SerialLink:
     def send_setpoints(self, timestamp_us: int, items: list):
         frame = pack_setpoints(self.sequence, timestamp_us, items)
         self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+        summary = {
+            "type": "setpoints",
+            "timestamp_us": int(timestamp_us),
+            "count": len(items),
+            "first": None,
+        }
+        if items:
+            it = items[0]
+            if isinstance(it, dict):
+                summary["first"] = {
+                    "motor_id": int(it.get("motor_id", 0)),
+                    "pos": float(it.get("pos", 0.0)),
+                    "vel": float(it.get("vel", 0.0)),
+                    "kp": float(it.get("kp", 0.0)),
+                    "kd": float(it.get("kd", 0.0)),
+                    "t_ff": float(it.get("t_ff", 0.0)),
+                    "frame": it.get("frame"),
+                }
+        self.last_tx = summary
         with self._lock:
             if self.loopback:
                 hdr = f"[LOOPBACK] SETPOINTS {len(items)} @ {timestamp_us} us"
@@ -132,6 +152,12 @@ class SerialLink:
     def send_command(self, cmd: int, motor_id: int = 0, timestamp_us: int = 0):
         frame = pack_command(self.sequence, cmd, motor_id, timestamp_us)
         self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+        self.last_tx = {
+            "type": "command",
+            "cmd": int(cmd),
+            "motor_id": int(motor_id),
+            "timestamp_us": int(timestamp_us) if timestamp_us else 0,
+        }
         with self._lock:
             if self.loopback:
                 cmd_names = {1: 'enable', 2: 'disable', 3: 'stop', 4: 'zero', 5: 'ping', 6: 'home', 7: 'calibrate'}
