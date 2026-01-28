@@ -46,6 +46,7 @@ class RobStrideProps(bpy.types.PropertyGroup):
     serial_port: bpy.props.EnumProperty(name="Port", description="Serial device used to communicate with ESP32-C6", items=list_serial_ports_items)
     baudrate: bpy.props.IntProperty(name="Baud", description="Serial baud rate. Firmware default is 921600", default=921600, min=9600, max=5000000)
     stream_rate: bpy.props.IntProperty(name="Stream Hz", description="Outgoing sample rate from Blender. Default 200 Hz", default=200, min=10, max=1000)
+    use_baked_cache: bpy.props.BoolProperty(name="Use baked cache", description="Use precomputed animation samples to reduce realtime evaluation load", default=False)
     buffer_ahead_ms: bpy.props.IntProperty(name="Buffer ms", description="Keep this much future trajectory queued on ESP32", default=500, min=100, max=2000)
     radians_for_rotation: bpy.props.BoolProperty(name="Radians for rotation", description="Interpret rotation channels as radians before scaling", default=True)
     connected: bpy.props.BoolProperty(name="Connected", description="Shows whether the serial link is open", default=False)
@@ -68,6 +69,7 @@ _traj_t0_us = None
 _scene_t0_s = 0.0
 _last_samples = {}
 _status_timer_running = False
+_bake_cache = {}
 
 
 def _active_motor_ids(props):
@@ -87,6 +89,14 @@ def _prune_telemetry(ser, active_ids):
                 del ser.last_error[mid]
 
 
+def _cache_stats():
+    motor_count = len(_bake_cache)
+    sample_count = 0
+    for entry in _bake_cache.values():
+        sample_count += len(entry.get("samples") or [])
+    return motor_count, sample_count
+
+
 def _status_timer():
     if not _status_timer_running:
         return None
@@ -94,6 +104,9 @@ def _status_timer():
         scene = getattr(bpy.context, "scene", None)
         props = getattr(scene, "robstride", None) if scene else None
         if props:
+            # Keep cache flag in sync with actual cache contents
+            if not _bake_cache and props.use_baked_cache:
+                props.use_baked_cache = False
             ser = _get_serial(bpy.context)
             connected_now = bool(ser and ser.is_open())
             if props.connected != connected_now:
@@ -120,6 +133,105 @@ def _get_motor_by_index(props, index):
     if index < 0 or index >= len(props.motors):
         return None
     return props.motors[index]
+
+
+def _nla_signature(obj):
+    ad = getattr(obj, "animation_data", None)
+    if not ad or not getattr(ad, "nla_tracks", None):
+        return ()
+    signature = []
+    for tr in ad.nla_tracks:
+        strips_sig = []
+        for strip in getattr(tr, "strips", []) or []:
+            act = getattr(strip, "action", None)
+            strips_sig.append((
+                strip.name,
+                getattr(act, "name", ""),
+                float(getattr(strip, "frame_start", 0.0)),
+                float(getattr(strip, "frame_end", 0.0)),
+                float(getattr(strip, "action_frame_start", 0.0)),
+                float(getattr(strip, "action_frame_end", 0.0)),
+            ))
+        signature.append((tr.name, bool(getattr(tr, "mute", False)), tuple(strips_sig)))
+    return tuple(signature)
+
+
+def _cache_key(motor, obj, props, scn):
+    ad = getattr(obj, "animation_data", None)
+    action_name = ""
+    if ad and getattr(ad, "action", None):
+        action_name = ad.action.name
+    fps = scn.render.fps
+    fps_base = scn.render.fps_base
+    return (
+        obj.name,
+        action_name,
+        _nla_signature(obj),
+        motor.channel,
+        float(motor.unit_scale),
+        bool(motor.radians_for_rotation),
+        int(scn.frame_start),
+        int(scn.frame_end),
+        float(fps),
+        float(fps_base),
+        int(props.stream_rate),
+    )
+
+
+def _bake_motor_cache(motor, obj, props, scn):
+    key = _cache_key(motor, obj, props, scn)
+    fps = scn.render.fps / scn.render.fps_base
+    f_start = float(getattr(scn, "frame_start", 1))
+    f_end = float(getattr(scn, "frame_end", f_start))
+    total_frames = max(1.0, (f_end - f_start + 1.0))
+    start_time_s = f_start / fps
+    duration_s = total_frames / fps
+    rate_hz = max(1, int(props.stream_rate))
+    unit_scale = motor.unit_scale
+    if motor.channel.startswith('ROT_') and not motor.radians_for_rotation:
+        unit_scale = (180.0 / pi) * motor.unit_scale
+    samples = fcurve_sampling.sample_stream_points(
+        obj,
+        motor.channel,
+        fps,
+        start_time_s,
+        horizon_s=duration_s,
+        rate_hz=rate_hz,
+        unit_scale=unit_scale,
+        rotation_in_radians=True,
+        scene=scn,
+        use_scene_eval=True,
+    )
+    _bake_cache[key] = {
+        "samples": samples,
+        "start_s": start_time_s,
+        "duration_s": duration_s,
+        "rate_hz": rate_hz,
+        "fps": fps,
+    }
+    return key, len(samples)
+
+
+def _get_baked_sample(motor, obj, props, scn, t_s):
+    key = _cache_key(motor, obj, props, scn)
+    entry = _bake_cache.get(key)
+    if not entry:
+        return None
+    samples = entry.get("samples") or []
+    if not samples:
+        return None
+    start_s = float(entry.get("start_s", 0.0))
+    duration_s = float(entry.get("duration_s", 0.0))
+    rate_hz = float(entry.get("rate_hz", 1.0))
+    if duration_s <= 0.0:
+        return None
+    rel_s = (t_s - start_s) % duration_s
+    idx = int(rel_s * rate_hz + 1e-6)
+    if idx < 0:
+        idx = 0
+    if idx >= len(samples):
+        idx = len(samples) - 1
+    return samples[idx]
 
 
 
@@ -382,6 +494,43 @@ class ROBSTRIDE_OT_motor_remove(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class ROBSTRIDE_OT_bake_cache(bpy.types.Operator):
+    bl_idname = "robstride.bake_cache"
+    bl_label = "Bake Cache"
+    bl_description = "Precompute animation samples for enabled motors to reduce realtime load"
+
+    def execute(self, context):
+        scn = context.scene
+        props = scn.robstride
+        baked = 0
+        for m in props.motors:
+            if not m.enabled:
+                continue
+            obj = m.object_ref or bpy.context.active_object
+            if obj is None:
+                continue
+            _, count = _bake_motor_cache(m, obj, props, scn)
+            if count:
+                baked += 1
+        self.report({'INFO'}, f"Baked cache for {baked} motor(s).")
+        return {'FINISHED'}
+
+
+class ROBSTRIDE_OT_clear_cache(bpy.types.Operator):
+    bl_idname = "robstride.clear_cache"
+    bl_label = "Clear Cache"
+    bl_description = "Clear precomputed animation cache"
+
+    def execute(self, context):
+        _bake_cache.clear()
+        try:
+            context.scene.robstride.use_baked_cache = False
+        except Exception:
+            pass
+        self.report({'INFO'}, "Cleared baked cache.")
+        return {'FINISHED'}
+
+
 def _timer_step():
     global _timer_running, _publish_horizon_us, _traj_t0_us
     scn = bpy.context.scene
@@ -451,22 +600,27 @@ def _timer_step():
         frame_f_raw = t_s * fps
         frame_f = wrap_frame(frame_f_raw)
         items = []
+        use_baked = bool(props.use_baked_cache)
         for m, obj in targets:
-            samples = fcurve_sampling.sample_stream_points(
-                obj,
-                m.channel,
-                fps,
-                t_s,
-                horizon_s=1.0 / rate_hz,
-                rate_hz=rate_hz,
-                unit_scale=(m.unit_scale if not m.channel.startswith('ROT_') else (1.0 if m.radians_for_rotation else 180.0 / pi) * m.unit_scale),
-                rotation_in_radians=True,
-                scene=scn,
-                use_scene_eval=True,
-            )
-            if not samples:
-                continue
-            sp = samples[0]
+            sp = None
+            if use_baked:
+                sp = _get_baked_sample(m, obj, props, scn, t_s)
+            if sp is None:
+                samples = fcurve_sampling.sample_stream_points(
+                    obj,
+                    m.channel,
+                    fps,
+                    t_s,
+                    horizon_s=1.0 / rate_hz,
+                    rate_hz=rate_hz,
+                    unit_scale=(m.unit_scale if not m.channel.startswith('ROT_') else (1.0 if m.radians_for_rotation else 180.0 / pi) * m.unit_scale),
+                    rotation_in_radians=True,
+                    scene=scn,
+                    use_scene_eval=True,
+                )
+                if not samples:
+                    continue
+                sp = samples[0]
             # Fallback numeric derivative using last sent sample for this motor if curve-based vel ~ 0
             v = sp['vel']
             a = sp['acc']
@@ -624,6 +778,18 @@ class ROBSTRIDE_PT_panel(bpy.types.Panel):
         row = stream_box.row()
         row.operator("robstride.start_stream")
         row.operator("robstride.stop_stream")
+        has_cache = bool(_bake_cache)
+        cache_motors, cache_samples = _cache_stats()
+        cache_row = stream_box.row()
+        cache_row.enabled = has_cache
+        cache_row.prop(props, "use_baked_cache")
+        bake_row = stream_box.row(align=True)
+        bake_row.operator("robstride.bake_cache")
+        clear_row = stream_box.row(align=True)
+        clear_row.enabled = has_cache
+        clear_row.operator("robstride.clear_cache")
+        if has_cache:
+            stream_box.label(text=f"Cache: {cache_samples} samples across {cache_motors} motor(s)")
 
         controls_box = layout.box()
         draw_section_header(controls_box, "show_global_controls", "Global Controls")
@@ -752,6 +918,8 @@ classes = (
     ROBSTRIDE_OT_motor_home,
     ROBSTRIDE_OT_motor_calibrate,
     ROBSTRIDE_OT_motor_remove,
+    ROBSTRIDE_OT_bake_cache,
+    ROBSTRIDE_OT_clear_cache,
     ROBSTRIDE_OT_add_motor,
     ROBSTRIDE_OT_remove_motor,
     ROBSTRIDE_OT_start_stream,
