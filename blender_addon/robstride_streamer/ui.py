@@ -217,12 +217,12 @@ def _timer_step():
 
     # Fill until horizon
     while _publish_horizon_us + int(1e6 / rate_hz) <= target_horizon_us:
-        # Scene time for this tick
-        if is_playing:
-            t_s = _scene_t0_s + (_publish_horizon_us / 1e6)
-        else:
-            sub = float(getattr(scn, 'frame_subframe', 0.0))
-            t_s = (scn.frame_current + sub) / fps
+        # Base scene time now from current frame/subframe, so playback speed affects timing
+        sub_now = float(getattr(scn, 'frame_subframe', 0.0))
+        t_scene_now = (scn.frame_current + sub_now) / fps
+        # Map publish time offset from current trajectory time to scene time
+        ahead_s = (_publish_horizon_us - traj_now_us) / 1e6
+        t_s = t_scene_now + max(0.0, ahead_s)
         frame_f_raw = t_s * fps
         frame_f = wrap_frame(frame_f_raw)
         items = []
