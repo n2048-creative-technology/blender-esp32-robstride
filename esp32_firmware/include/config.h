@@ -6,7 +6,7 @@
 #define SERIAL_BAUD 921600
 
 // On-board addressable RGB LED (RMT-driven). Set to -1 to disable.
-#define LED_GPIO 8
+#define LED_GPIO 48
 // Pulse duration when a command is received (microseconds)
 #define LED_PULSE_US 50000
 // LED colors (0-255 per channel)
@@ -20,11 +20,19 @@
 #define LED_FAIL_G 0
 #define LED_FAIL_B 0
 
-// TWAI pins and bitrate for ESP32-C6, adjust to your wiring
+// TWAI pins and bitrate for ESP32-S3/C6, adjust to your wiring
 // These are example GPIOs, verify against your board and transceiver
 #define TWAI_TX_PIN 5
 #define TWAI_RX_PIN 6
 #define TWAI_BAUD 1000000
+
+// Use RobStride CAN protocol (extended 29-bit IDs with type/host/motor layout)
+#define ROBSTRIDE_MODE 1
+// 16-bit host/master ID field used by RobStride extended ID layout
+#define ROBSTRIDE_HOST_ID 0x00AA
+// CAN identifier format: 1 = extended 29-bit, 0 = standard 11-bit.
+// RobStride requires extended; leave at 1 when ROBSTRIDE_MODE is enabled.
+#define CAN_USE_EXTENDED 1
 
 // Motors
 #define MAX_MOTORS 6

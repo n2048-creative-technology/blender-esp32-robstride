@@ -16,6 +16,10 @@
 #include "robstride_can.h"
 #include "safety.h"
 
+#ifndef RMT_ENCODER_FUNC_ATTR
+#define RMT_ENCODER_FUNC_ATTR
+#endif
+
 #ifndef PI
 #define PI 3.14159265358979323846f
 #endif
@@ -207,15 +211,16 @@ static void handle_command(uint8_t cmd, uint8_t motor_id) {
       canbus.send_enable(motor_id);
       break;
     case 2:  // disable
-      // Not a defined disable in RobStride docs provided. Enter safe stop for selected motors.
       for (uint8_t i = 0; i < motors_used; ++i) {
         if (motor_id == 0 || motor_ids[i] == motor_id) safety.set_estop(i, true);
       }
+      if (motor_id != 0) canbus.send_stop(motor_id);
       break;
     case 3:  // stop
       for (uint8_t i = 0; i < motors_used; ++i) {
         if (motor_id == 0 || motor_ids[i] == motor_id) safety.set_estop(i, true);
       }
+      if (motor_id != 0) canbus.send_stop(motor_id);
       break;
     case 4:  // zero offset (software only placeholder)
       for (uint8_t i = 0; i < motors_used; ++i) {

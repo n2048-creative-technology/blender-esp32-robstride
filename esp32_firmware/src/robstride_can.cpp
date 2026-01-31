@@ -3,7 +3,16 @@
 bool RobStrideCAN::begin() {
   if (started_) return true;
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)TWAI_TX_PIN, (gpio_num_t)TWAI_RX_PIN, TWAI_MODE_NORMAL);
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
+  twai_timing_config_t t_config;
+#if TWAI_BAUD == 1000000
+  t_config = TWAI_TIMING_CONFIG_1MBITS();
+#elif TWAI_BAUD == 500000
+  t_config = TWAI_TIMING_CONFIG_500KBITS();
+#elif TWAI_BAUD == 250000
+  t_config = TWAI_TIMING_CONFIG_250KBITS();
+#else
+  t_config = TWAI_TIMING_CONFIG_1MBITS();
+#endif
   twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
   if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) return false;
   if (twai_start() != ESP_OK) return false;
@@ -43,26 +52,62 @@ void RobStrideCAN::pack_mit(float p, float v, float kp, float kd, float t, uint8
   out[7] = t_u & 0xFF;
 }
 
-bool RobStrideCAN::send_enable(uint8_t motor_id) {
+bool RobStrideCAN::tx_frame(uint32_t id, bool ext, const uint8_t data[8], uint8_t dlc) {
   if (!started_) return false;
   twai_message_t msg = {};
-  msg.identifier = 0x200 + (motor_id & 0x1F);
-  msg.extd = 1;  // extended 29-bit
-  msg.data_length_code = 8;
-  for (int i = 0; i < 8; ++i) msg.data[i] = 0xFF;
+  msg.identifier = id;
+  msg.extd = ext ? 1 : 0;
+  msg.data_length_code = dlc;
+  for (int i = 0; i < dlc && i < 8; ++i) msg.data[i] = data[i];
   return twai_transmit(&msg, pdMS_TO_TICKS(5)) == ESP_OK;
 }
 
+uint32_t RobStrideCAN::make_rs_id(uint8_t type, uint8_t motor_id) {
+  // Extended 29-bit ID: [ mode(5) | host_id(16) | motor_id(8) ]
+  uint32_t id = ((uint32_t)(type & 0x1F) << 24) | ((uint32_t)(ROBSTRIDE_HOST_ID & 0xFFFF) << 8) | (uint32_t)(motor_id & 0xFF);
+  return id;
+}
+
+bool RobStrideCAN::send_enable(uint8_t motor_id) {
+#if ROBSTRIDE_MODE
+  // RobStride enable sequence: 
+  // 1) Type 0x12 write index 0x7005 = 1
+  // 2) Type 0x03 (enable) with 8 zero bytes
+  uint8_t data1[8] = {0x05, 0x70, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00};
+  (void)tx_frame(make_rs_id(0x12, motor_id), true, data1, 8);
+  uint8_t zeros[8] = {0};
+  return tx_frame(make_rs_id(0x03, motor_id), true, zeros, 8);
+#else
+  if (!started_) return false;
+  twai_message_t msg = {};
+  msg.identifier = 0x200 + (motor_id & 0x1F);
+  msg.extd = CAN_USE_EXTENDED ? 1 : 0;
+  msg.data_length_code = 8;
+  for (int i = 0; i < 8; ++i) msg.data[i] = 0xFF;
+  return twai_transmit(&msg, pdMS_TO_TICKS(5)) == ESP_OK;
+#endif
+}
+
 bool RobStrideCAN::send_cmd(uint8_t motor_id, float p, float v, float kp, float kd, float t) {
+#if ROBSTRIDE_MODE
+  // RobStride position write: Type 0x12, index 0x7016, value float32 LE radians
+  (void)v; (void)kp; (void)kd; (void)t;
+  uint8_t data[8];
+  data[0] = 0x16; data[1] = 0x70; data[2] = 0x00; data[3] = 0x00;
+  union { float f; uint8_t b[4]; } u; u.f = p;
+  data[4] = u.b[0]; data[5] = u.b[1]; data[6] = u.b[2]; data[7] = u.b[3];
+  return tx_frame(make_rs_id(0x12, motor_id), true, data, 8);
+#else
   if (!started_) return false;
   uint8_t data[8];
   pack_mit(p, v, kp, kd, t, data);
   twai_message_t msg = {};
   msg.identifier = 0x200 + (motor_id & 0x1F);
-  msg.extd = 1;
+  msg.extd = CAN_USE_EXTENDED ? 1 : 0;
   msg.data_length_code = 8;
   for (int i = 0; i < 8; ++i) msg.data[i] = data[i];
   return twai_transmit(&msg, pdMS_TO_TICKS(5)) == ESP_OK;
+#endif
 }
 
 bool RobStrideCAN::poll_rx() {
@@ -76,4 +121,14 @@ bool RobStrideCAN::poll_rx() {
     return true;
   }
   return false;
+}
+
+bool RobStrideCAN::send_stop(uint8_t motor_id) {
+#if ROBSTRIDE_MODE
+  uint8_t zeros[8] = {0};
+  return tx_frame(make_rs_id(0x04, motor_id), true, zeros, 8);
+#else
+  // No defined STOP in MIT scheme; return false
+  return false;
+#endif
 }

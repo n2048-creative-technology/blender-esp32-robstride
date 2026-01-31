@@ -1,0 +1,41 @@
+
+ROBSTRIDE STREAMER - STANDALONE INSTALLATION
+==============================================
+
+This package contains everything needed to install the RobStride Streamer addon.
+
+QUICK START:
+-----------
+
+1. Extract this .zip file:
+   unzip robstride-streamer-*-standalone.zip
+
+2. Run the installer:
+   cd robstride-streamer-*-standalone
+   python3 install.py
+
+3. Restart Blender and enable the addon:
+   Edit → Preferences → Add-ons → Search "RobStride" → Enable
+
+That's it! No internet connection required.
+
+WHAT'S INCLUDED:
+----------------
+✓ Complete addon source code
+✓ Pre-built wheels for all dependencies (pyserial and its dependencies)
+✓ Smart installation script
+✓ Complete documentation
+
+SYSTEM REQUIREMENTS:
+--------------------
+- Blender 3.0 or higher
+- Python 3.6+ (included with Blender)
+- Linux, macOS, or Windows
+
+TROUBLESHOOTING:
+----------------
+If the installer fails, see README.md or INSTALL.md
+
+For questions or issues:
+- Check README.md for features and usage
+- Check INSTALL.md for detailed installation help

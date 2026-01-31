@@ -7,6 +7,9 @@
 #include <type_traits>
 
 #include "driver/uart.h"
+#if CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED
+#include "driver/usb_serial_jtag.h"
+#endif
 #include "esp_timer.h"
 
 class SerialCompat {
@@ -44,6 +47,9 @@ class SerialCompat {
 
  private:
   bool started_ = false;
+  int peeked_ = -1;  // for USB-JTAG non-blocking read
+  bool use_usb_ = true;    // default to USB Serial/JTAG when available
+  bool usb_ready_ = false;
 };
 
 extern SerialCompat Serial;

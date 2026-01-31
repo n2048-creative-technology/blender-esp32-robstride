@@ -10,6 +10,7 @@ class RobStrideCAN {
   void end();
   bool send_enable(uint8_t motor_id);
   bool send_cmd(uint8_t motor_id, float p, float v, float kp, float kd, float t);
+  bool send_stop(uint8_t motor_id);
   bool poll_rx();
   uint32_t rx_count = 0;
   uint32_t last_can_id = 0;
@@ -18,4 +19,6 @@ class RobStrideCAN {
  private:
   bool started_ = false;
   void pack_mit(float p, float v, float kp, float kd, float t, uint8_t out[8]);
+  bool tx_frame(uint32_t id, bool ext, const uint8_t data[8], uint8_t dlc = 8);
+  uint32_t make_rs_id(uint8_t type, uint8_t motor_id);
 };
