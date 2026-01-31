@@ -48,7 +48,7 @@
 #define SOFT_LIMIT_MAX  6.283185307179586f
 
 // Motion limits
-#define MAX_VEL 20.0f        // rad/s
+#define MAX_VEL 45.0f        // rad/s
 #define MAX_ACC 200.0f       // rad/s^2
 
 // Scaling to RobStride MIT mode 8-byte frame
