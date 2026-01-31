@@ -37,6 +37,8 @@ static bool calib_active[MAX_MOTORS];
 static uint32_t calib_start_us[MAX_MOTORS];
 static bool buffer_underrun[MAX_MOTORS];
 static uint16_t last_error_code[MAX_MOTORS];
+static float last_ref_pos[MAX_MOTORS];
+static bool last_ref_valid[MAX_MOTORS];
 
 static const uint16_t ERR_BUFFER_UNDERRUN = 1;
 static const uint16_t ERR_WATCHDOG_TIMEOUT = 2;
@@ -196,7 +198,7 @@ static void handle_setpoints(uint32_t ts_us, const Setpoint* sps, uint8_t count)
       motor_ids[idx] = mid;
     }
     Setpoint sp = sps[i];
-    if (!safety.within_limits(sp.pos)) {
+    if (!safety.within_limits(idx, sp.pos)) {
       continue;
     }
     buffers[idx].push(sp);
@@ -269,6 +271,7 @@ void setup() {
   proto.begin(SERIAL_BAUD);
   proto.on_setpoints(handle_setpoints);
   proto.on_command(handle_command);
+  safety.init();
   canbus.begin();
   for (uint8_t i = 0; i < MAX_MOTORS; ++i) buffers[i].init(2048);
   for (uint8_t i = 0; i < MAX_MOTORS; ++i) {
@@ -277,6 +280,8 @@ void setup() {
     calib_start_us[i] = 0;
     buffer_underrun[i] = false;
     last_error_code[i] = 0;
+    last_ref_pos[i] = 0.0f;
+    last_ref_valid[i] = false;
   }
 #if LED_GPIO >= 0
   rmt_tx_channel_config_t tx_chan_config = {};
@@ -329,7 +334,14 @@ void loop() {
         RefState ref{};
         bool interp_ok = interp.compute(buffers[idx], traj_now, &ref);
         if (!interp_ok) {
-          led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
+          // Hold-last behavior when buffer is empty: if we have a last reference, reuse it
+          if (last_ref_valid[idx]) {
+            ref.pos = last_ref_pos[idx];
+            ref.vel = 0.0f;
+            interp_ok = true; // treat as valid to avoid empty error
+          } else {
+            led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
+          }
         }
         // Calibration waveform overrides
         if (calib_active[idx]) {
@@ -345,6 +357,7 @@ void loop() {
             calib_active[idx] = false;
           }
         }
+        ref.pos = safety.clamp_pos(idx, ref.pos);
         float kp = 30.0f, kd = 0.5f, v = ref.vel;
         bool wd = safety.check_watchdog(idx, traj_now);
         if (safety.st.estop[idx] || wd || buffer_underrun[idx]) {
@@ -356,6 +369,9 @@ void loop() {
         if (!can_ok) {
           led_pulse(LED_FAIL_R, LED_FAIL_G, LED_FAIL_B);
         }
+        // Update last commanded reference for hold-last behavior
+        last_ref_pos[idx] = ref.pos;
+        last_ref_valid[idx] = true;
         uint16_t err = 0;
         if (!interp_ok) {
           err = ERR_INTERP_EMPTY;

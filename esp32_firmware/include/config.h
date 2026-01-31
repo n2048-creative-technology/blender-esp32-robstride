@@ -43,6 +43,7 @@
 #define WATCHDOG_US 100000    // 100 ms watchdog
 
 // Safety limits (radians)
+#define USE_LIMITS 0
 #define SOFT_LIMIT_MIN -6.283185307179586f
 #define SOFT_LIMIT_MAX  6.283185307179586f
 

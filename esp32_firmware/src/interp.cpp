@@ -77,7 +77,6 @@ bool Interpolator::compute(const RingBuffer& rb, uint32_t t_us, RefState* out) {
   float acc = clampf((v1 - v0) / h, -MAX_ACC, MAX_ACC);
   // Limits
   vel = clampf(vel, -MAX_VEL, MAX_VEL);
-  pos = clampf(pos, SOFT_LIMIT_MIN, SOFT_LIMIT_MAX);
   out->pos = pos;
   out->vel = vel;
   out->acc = acc;
