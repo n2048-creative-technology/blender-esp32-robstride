@@ -1,7 +1,7 @@
-ESP32-C6 Firmware for RobStride Live Streamer
+ESP32-S3 Firmware for RobStride Live Streamer (Single Axis)
 
 Hardware
-- Target: ESP32-C6-DevKitC-1
+- Target: ESP32-S3-DevKitC-1
 - External CAN transceiver required. ESP32-C6 has TWAI controller only.
 - Wire ESP32-C6 TWAI TX and RX pins to transceiver TXD and RXD.
 - Connect transceiver CANH and CANL to RobStride RS01 or RS02 bus. Ensure 120 ohm termination at bus ends.
@@ -9,7 +9,7 @@ Hardware
 
 Build and Upload
 - Use PlatformIO in VS Code or CLI.
-- Board: esp32-c6-devkitc-1, Framework: Arduino.
+- Board: esp32-s3-devkitc-1, Framework: espidf.
 - Monitor speed 921600.
 
 Serial Protocol
@@ -27,17 +27,47 @@ Interpolation
 - Hold flag prevents overshoot by freezing at the held value. Step flag is respected by clamping velocity via motion limits.
 - Max velocity and acceleration limits are enforced from include/config.h.
 
-RobStride MIT Mode over CAN
-- CAN 2.0B extended frames at 1,000,000 bps.
-- Command ID: 0x200 + motor_id.
-- Enable: send 8 bytes of 0xFF to the command ID.
-- Position and velocity control: packs p, v, kp, kd, t into 8 bytes using scaling defined in include/config.h. Adjust ranges to match your motor firmware.
-- Firmware logs if any CAN RX frame is received.
+RobStride Mode over CAN
+- CAN 2.0B extended frames at 1,000,000 bps (configurable via TWAI_BAUD).
+- Extended 29‑bit IDs: [type(5) | host_id(16) | motor_id(8)].
+- Enable sequence: write 0x7005 = 1 (type 0x12), then enable (type 0x03).
+- Position write: index 0x7016 (type 0x12), value float32 LE radians.
+- Velocity write (homing): index 0x7017 (type 0x12), value float32 LE rad/s.
+- Optional position read: request index 0x7016 (type 0x11); used to seed homing.
+
+Initialization and Homing
+- On boot, the firmware initializes TWAI, limit switch GPIOs (NC to GND with pull‑ups), LED driver, and loads the last commanded position from NVS.
+- Homing starts immediately and serial is **not** started until homing completes or fails.
+- Homing sequence:
+  1) Optional position read over CAN to seed the homing integrator.
+  2) Clear actuator target (STOP), then warm up with velocity=0 for HOMING_VEL_WARMUP_MS.
+  3) Enable motor and move toward MAX at HOMING_VEL (velocity mode if supported).
+  4) Reverse toward MIN at HOMING_VEL until the MIN switch triggers.
+  5) Move off MIN by HOMING_CLEAR_MM so the switch releases.
+  6) Calibrate travel range: compute radians per mm from MAX→MIN travel and TOTAL_RANGE_MM.
+  7) Define 0 mm at the “cleared” MIN position; system waits for Blender setpoints.
+- If velocity mode is unsupported, the firmware falls back to position‑based homing after HOMING_VEL_FALLBACK_MS.
+- LED behavior (unique signals, priority order):
+  - Limit switch active: solid GREEN.
+  - Estop active: solid RED.
+  - Watchdog tripped: fast RED blink.
+  - Buffer underrun: double RED blink.
+  - CAN TX failed: fast MAGENTA blink.
+  - Interpolator empty: slow MAGENTA blink.
+  - Serial pause (no new frames): slow AMBER blink.
+  - Hold‑last mode: slow CYAN blink.
+  - Calibration active: PURPLE breathe.
+  - Homing active: BLUE breathe.
+  - Streaming active: slow WHITE blink.
+  - Idle: LED off.
+  - Command received: brief CYAN pulse (only when idle/streaming).
+  - CAN RX activity: brief WHITE pulse (only when idle/streaming).
 
 Configuration
 - Edit include/config.h to set pins, limits, and scaling constants.
 - DEFAULT_MOTOR_ID selects the single CAN motor ID (default 4). Setpoints and commands for other IDs are ignored.
-- Adjust POS_MIN/MAX, VEL_MIN/MAX, KP_MIN/MAX, KD_MIN/MAX, T_MIN/MAX to match RobStride firmware expectations.
+- TOTAL_RANGE_MM sets the full mechanical travel in millimeters (e.g., 2000.0).
+- If using RobStride, adjust ROBSTRIDE_HOST_ID and indexes if your actuator firmware differs.
 
 Troubleshooting
 - No CAN frames: check transceiver wiring, TX/RX pins, CAN bitrate 1 Mbps, and termination.

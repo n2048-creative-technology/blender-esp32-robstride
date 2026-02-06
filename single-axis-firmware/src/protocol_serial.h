@@ -20,7 +20,7 @@ struct RxStats {
 };
 
 typedef void (*SetpointHandler)(uint32_t timestamp_us, const Setpoint* sps, uint8_t count);
-typedef void (*CommandHandler)(uint8_t cmd, uint8_t motor_id);
+typedef void (*CommandHandler)(uint8_t cmd);
 
 class SerialProtocol {
  public:
@@ -29,6 +29,7 @@ class SerialProtocol {
   void on_command(CommandHandler cb) { cmd_cb_ = cb; }
   void poll();
   RxStats stats;
+  uint32_t last_rx_us = 0;
 
  private:
   enum State { FIND_HEADER_1, FIND_HEADER_2, READ_FIXED, READ_ITEMS, READ_CRC1, READ_CRC2 };
@@ -57,5 +58,5 @@ class SerialProtocol {
 uint16_t crc16_ccitt(const uint8_t* data, size_t len);
 
 // TX helpers
-void serial_send_telemetry(uint8_t motor_id, uint32_t rx_count, uint16_t can_rx_flags, uint32_t last_can_id, uint16_t status_flags);
-void serial_send_error(uint8_t motor_id, uint16_t error_code);
+void serial_send_telemetry(uint32_t rx_count, uint16_t can_rx_flags, uint32_t last_can_id, uint16_t status_flags);
+void serial_send_error(uint16_t error_code);

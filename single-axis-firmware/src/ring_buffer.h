@@ -13,7 +13,6 @@ struct Setpoint {
   float kd;
   float t_ff;
   uint16_t flags;
-  uint8_t motor_id;
 };
 
 class RingBuffer {

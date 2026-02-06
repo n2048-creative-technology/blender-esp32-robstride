@@ -24,6 +24,7 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 
 void SerialProtocol::begin(unsigned long baud) {
   Serial.begin(static_cast<uint32_t>(baud));
+  last_rx_us = static_cast<uint32_t>(micros());
 }
 
 void SerialProtocol::reset_state() {
@@ -77,13 +78,13 @@ void SerialProtocol::poll() {
           if (type_ == MSG_SETPOINTS) {
             items_filled_ = 0;
             item_buf_idx_ = 0;
-            item_bytes_expected_ = static_cast<size_t>(count_) * (1 + 6 * 4 + 2);
+            item_bytes_expected_ = static_cast<size_t>(count_) * (6 * 4 + 2);
             if (item_bytes_expected_ > sizeof(item_buf_)) {
               item_bytes_expected_ = sizeof(item_buf_);
             }
             state_ = READ_ITEMS;
           } else if (type_ == MSG_COMMAND) {
-            item_bytes_expected_ = 2;
+            item_bytes_expected_ = 1;
             item_buf_idx_ = 0;
             state_ = READ_ITEMS;
           } else {
@@ -96,18 +97,17 @@ void SerialProtocol::poll() {
         if (item_buf_idx_ == item_bytes_expected_) {
           if (type_ == MSG_SETPOINTS) {
             uint8_t offset = 0;
-            const uint8_t stride = (1 + 6 * 4 + 2);
+            const uint8_t stride = (6 * 4 + 2);
             for (uint8_t i = 0; i < count_ && i < MAX_MOTORS; ++i) {
               const uint8_t* p = item_buf_ + offset;
               Setpoint sp{};
-              sp.motor_id = p[0];
-              std::memcpy(&sp.pos, p + 1, 4);
-              std::memcpy(&sp.vel, p + 5, 4);
-              std::memcpy(&sp.acc, p + 9, 4);
-              std::memcpy(&sp.kp, p + 13, 4);
-              std::memcpy(&sp.kd, p + 17, 4);
-              std::memcpy(&sp.t_ff, p + 21, 4);
-              std::memcpy(&sp.flags, p + 25, 2);
+              std::memcpy(&sp.pos, p + 0, 4);
+              std::memcpy(&sp.vel, p + 4, 4);
+              std::memcpy(&sp.acc, p + 8, 4);
+              std::memcpy(&sp.kp, p + 12, 4);
+              std::memcpy(&sp.kd, p + 16, 4);
+              std::memcpy(&sp.t_ff, p + 20, 4);
+              std::memcpy(&sp.flags, p + 24, 2);
               sp.t_us = ts_us_;
               items_[items_filled_++] = sp;
               offset += stride;
@@ -127,12 +127,12 @@ void SerialProtocol::poll() {
         crc_rx_ |= (uint16_t)b << 8;
         if (crc_rx_ == crc_calc_) {
           stats.frames_ok++;
+          last_rx_us = static_cast<uint32_t>(micros());
           if (type_ == MSG_SETPOINTS && sp_cb_) {
             sp_cb_(ts_us_, items_, items_filled_);
           } else if (type_ == MSG_COMMAND && cmd_cb_) {
             uint8_t cmd = item_buf_[0];
-            uint8_t motor_id = item_buf_[1];
-            cmd_cb_(cmd, motor_id);
+            cmd_cb_(cmd);
           }
         } else {
           stats.frames_bad_crc++;
@@ -143,8 +143,8 @@ void SerialProtocol::poll() {
   }
 }
 
-void serial_send_telemetry(uint8_t motor_id, uint32_t rx_count, uint16_t can_rx_flags, uint32_t last_can_id, uint16_t status_flags) {
-  uint8_t payload[1 + 1 + 4 + 4 + 1 + 1 + 4 + 2 + 4 + 2];
+void serial_send_telemetry(uint32_t rx_count, uint16_t can_rx_flags, uint32_t last_can_id, uint16_t status_flags) {
+  uint8_t payload[1 + 1 + 4 + 4 + 1 + 4 + 2 + 4 + 2];
   uint8_t* p = payload;
   *p++ = 1;
   *p++ = MSG_TELEMETRY;
@@ -155,7 +155,6 @@ void serial_send_telemetry(uint8_t motor_id, uint32_t rx_count, uint16_t can_rx_
   std::memcpy(p, &ts, 4);
   p += 4;
   *p++ = 1;
-  *p++ = motor_id;
   std::memcpy(p, &rx_count, 4);
   p += 4;
   std::memcpy(p, &can_rx_flags, 2);
@@ -171,8 +170,8 @@ void serial_send_telemetry(uint8_t motor_id, uint32_t rx_count, uint16_t can_rx_
   Serial.write(reinterpret_cast<uint8_t*>(&crc), 2);
 }
 
-void serial_send_error(uint8_t motor_id, uint16_t error_code) {
-  uint8_t payload[1 + 1 + 4 + 4 + 1 + 1 + 2];
+void serial_send_error(uint16_t error_code) {
+  uint8_t payload[1 + 1 + 4 + 4 + 1 + 2];
   uint8_t* p = payload;
   *p++ = 1;
   *p++ = MSG_ERROR;
@@ -183,7 +182,6 @@ void serial_send_error(uint8_t motor_id, uint16_t error_code) {
   std::memcpy(p, &ts, 4);
   p += 4;
   *p++ = 1;
-  *p++ = motor_id;
   std::memcpy(p, &error_code, 2);
   p += 2;
   uint16_t crc = crc16_ccitt(payload, sizeof(payload));
